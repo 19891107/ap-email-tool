@@ -105,7 +105,7 @@ function buildHTML(vendor,invoices,groups,hasFiles,senderName,senderCompany,date
       const trace=ii===0
         ?`<td ${td(bg)} rowspan="${gInv.length}">${g.traceLink?`<a href="${g.traceLink}" style="color:#1F3864;">View Trace</a>`:"—"}</td>`
         :"";
-      rows+=`<tr><td ${td(bg)}>${inv.invoice}</td><td ${td(bg)}>${inv.currency}</td><td ${tdR(bg)}>${inv.amount}</td><td ${td(bg)}>${inv.comment||"—"}</td>${trace}</tr>`;
+      rows+=`<tr><td ${td(bg)}>${inv.invoice}</td><td ${td(bg)}>${inv.currency}</td><td ${tdR(bg)}>${inv.amount}</td><td ${td(bg)}>${inv.comment||"—"}</td>${trace}</tr>\n`;
     });
   });
   return`<div style="${font}line-height:1.6;max-width:700px;">
