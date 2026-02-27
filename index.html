@@ -12,7 +12,6 @@
   body{font-family:"Segoe UI",sans-serif;background:#f0f4f8;min-height:100vh}
   input,textarea{font-family:"Segoe UI",sans-serif}
   kbd{background:#eee;padding:1px 5px;border-radius:3px;font-size:12px}
-  a{color:#1F3864}
   ::-webkit-scrollbar{width:6px;height:6px}
   ::-webkit-scrollbar-thumb{background:#ccc;border-radius:3px}
 </style>
@@ -20,19 +19,12 @@
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const { useState, useEffect, useRef } = React;
+const { useState, useEffect } = React;
 
-// ═══════════════════════════════════════════════════════
-//  ⚙️  CONFIGURATION — 填入你的 Azure App Client ID
-//      注册地址: https://portal.azure.com → App registrations
-//      Redirect URI: 本文件在 SharePoint 上的完整 URL
-//      Permission: Mail.ReadWrite (Delegated)
-// ═══════════════════════════════════════════════════════
 const CLIENT_ID    = "5469cd12-9e8c-4344-8120-3c3f7b8bcdfe";
 const TENANT_ID    = "d01ba920-936c-43d4-9122-56a0a8295ec7";
 const REDIRECT_URI = window.location.href.split("?")[0].split("#")[0];
 const SCOPES       = "openid profile Mail.ReadWrite";
-// ═══════════════════════════════════════════════════════
 
 const SAMPLE_DATA = [
   {vendor:"EuroFast",  invoice:"EFI2312",     amount:"26,396.00",  currency:"RON",comment:""},
@@ -51,25 +43,41 @@ function saveLS(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch{}}
 function groupByVendor(rows){
   return rows.reduce((a,r)=>{(a[r.vendor]=a[r.vendor]||[]).push(r);return a;},{});
 }
-function parseCSV(text){
-  const lines=text.trim().split("\n").filter(l=>l.trim());
-  if(lines.length<2)return[];
-  const headers=lines[0].split("\t").map(h=>h.trim().toLowerCase().replace(/\r/g,""));
-  return lines.slice(1).map(line=>{
-    const cols=line.split("\t");
-    const r={};
-    headers.forEach((h,i)=>{r[h]=(cols[i]||"").trim().replace(/\r/g,"");});
-    return{
-      vendor:  r["vendor"]||r["vendor name"]||"",
-      invoice: r["invoice no."]||r["invoice no"]||r["invoice"]||"",
-      amount:  r["amount local"]||r["amount"]||"",
-      currency:r["currency"]||"",
-      comment: r["comment/track link"]||r["comment"]||"",
-    };
-  }).filter(r=>r.vendor);
+
+// Mode detection: exactly 5 standard cols = standard mode, otherwise flex
+const STD_HEADERS = ["vendor","invoice no.","amount local","currency","comment/track link"];
+function detectMode(headers){
+  return headers.length===5 && STD_HEADERS.every((h,i)=>headers[i]===h) ? "standard" : "flex";
 }
 
-// ── PKCE OAuth ──────────────────────────────────────────
+function parseCSV(text){
+  const lines=text.trim().split("\n").filter(l=>l.trim());
+  if(lines.length<2)return{mode:"standard",rows:[],flexHeaders:[]};
+  const rawHeaders=lines[0].split("\t").map(h=>h.trim().replace(/\r/g,""));
+  const headers=rawHeaders.map(h=>h.toLowerCase());
+  const mode=detectMode(headers);
+
+  if(mode==="standard"){
+    const rows=lines.slice(1).map(line=>{
+      const cols=line.split("\t");
+      const r={};
+      headers.forEach((h,i)=>{r[h]=(cols[i]||"").trim().replace(/\r/g,"");});
+      return{vendor:r["vendor"]||"",invoice:r["invoice no."]||"",amount:r["amount local"]||"",currency:r["currency"]||"",comment:r["comment/track link"]||""};
+    }).filter(r=>r.vendor);
+    return{mode,rows,flexHeaders:[]};
+  } else {
+    const rows=lines.slice(1).map(line=>{
+      const cols=line.split("\t").map(c=>c.trim().replace(/\r/g,""));
+      const vendor=cols[0]||"";
+      const raw={};
+      rawHeaders.forEach((h,i)=>{raw[h]=cols[i]||"";});
+      return{vendor,_raw:raw};
+    }).filter(r=>r.vendor);
+    return{mode,rows,flexHeaders:rawHeaders.slice(1)};
+  }
+}
+
+// PKCE
 function b64url(buf){return btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=/g,"");}
 async function generatePKCE(){
   const verifier=b64url(crypto.getRandomValues(new Uint8Array(32)));
@@ -90,38 +98,74 @@ async function exchangeCode(code,verifier){
   return r.json();
 }
 
-// ── Email HTML builder ──────────────────────────────────
+// Standard email HTML
 function buildHTML(vendor,invoices,groups,hasFiles,senderName,senderCompany,date){
-  const font="font-family:Arial,sans-serif;font-size:11pt;color:#222;";
-  const p=`style="${font}margin:0 0 14pt 0;"`;
-  const th=`style="background:#1F3864;color:#ffffff;padding:8px 12px;text-align:left;border:1px solid #1F3864;font-family:Arial,sans-serif;font-size:11pt;"`;
   const td=bg=>`style="padding:7px 12px;border:1px solid #d0d0d0;font-family:Arial,sans-serif;font-size:11pt;background:${bg};"`;
   const tdR=bg=>`style="padding:7px 12px;border:1px solid #d0d0d0;font-family:Arial,sans-serif;font-size:11pt;text-align:right;background:${bg};"`;
+  const hasNotes=invoices.some(inv=>inv.comment&&inv.comment.trim()!=="");
   let rows="";
   groups.forEach((g,gi)=>{
     const bg=gi%2===0?"#ffffff":"#f0f4fa";
     const gInv=(g.invoiceIndices||[]).map(i=>invoices[i]).filter(Boolean);
     gInv.forEach((inv,ii)=>{
       const trace=ii===0
-        ?`<td ${td(bg)} rowspan="${gInv.length}">${g.traceLink?`<a href="${g.traceLink}" style="color:#1F3864;">View Trace</a>`:"—"}</td>`
-        :"";
-      rows+=`<tr><td ${td(bg)}>${inv.invoice}</td><td ${td(bg)}>${inv.currency}</td><td ${tdR(bg)}>${inv.amount}</td><td ${td(bg)}>${inv.comment||"—"}</td>${trace}</tr>\n`;
+        ?`<td ${td(bg)} rowspan="${gInv.length}">${g.traceLink?`<a href="${g.traceLink}" style="color:#1F3864;">View Trace</a>`:"—"}</td>`:"";
+      const notesCell=hasNotes?`<td ${td(bg)}>${inv.comment||"—"}</td>`:"";
+      rows+=`<tr><td ${td(bg)}>${inv.invoice}</td><td ${td(bg)}>${inv.currency}</td><td ${tdR(bg)}>${inv.amount}</td>${notesCell}${trace}</tr>\n`;
     });
   });
-  return`<div style="${font}line-height:1.6;max-width:700px;">
-<p ${p}>Dear ${vendor} Team,</p>
-<p ${p}>We are pleased to inform you that the following payment(s) have been successfully processed on <strong>${date}</strong>. Please find the details below:</p>
-<table style="border-collapse:collapse;width:100%;"><thead><tr>
-  <th ${th}>Invoice No.</th><th ${th}>Currency</th><th ${th}>Amount</th><th ${th}>Notes</th><th ${th}>Payment Trace</th>
-</tr></thead><tbody>${rows}</tbody></table>
-<p style="margin:0 0 14pt 0;"> </p>
-${hasFiles?`<p ${p}>Please find the remittance advice attached to this email for your reference.</p>`:""}
-<p ${p}>Could you please confirm receipt of the above payment(s)? Should you have any questions or notice any discrepancies, please do not hesitate to contact us.</p>
-<p ${p}>Best regards,<br/><strong>${senderName}</strong><br/>${senderCompany}</p>
-</div>`;
+  const thStyle=`style="background:#1F3864;color:#fff;padding:8px 12px;border:1px solid #1F3864;font-family:Arial,sans-serif;font-size:11pt;white-space:nowrap;"`;
+  const notesHeader=hasNotes?`<th ${thStyle}>Notes</th>`:"";
+  return`<table cellpadding="0" cellspacing="0" border="0" style="font-family:Arial,sans-serif;font-size:11pt;color:#222;">
+<tr><td style="padding-bottom:14pt;">Dear ${vendor} Team,</td></tr>
+<tr><td style="padding-bottom:14pt;">We are pleased to inform you that the following payment(s) have been successfully processed on <strong style="white-space:nowrap;">${date}</strong>.</td></tr>
+<tr><td style="padding-bottom:14pt;">Please find the details below:</td></tr>
+<tr><td style="padding-bottom:0;">
+  <table style="border-collapse:collapse;">
+    <thead><tr>
+      <th ${thStyle}>Invoice No.</th>
+      <th ${thStyle}>Currency</th>
+      <th ${thStyle}>Amount</th>
+      ${notesHeader}
+      <th ${thStyle}>Payment Trace</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>
+</td></tr>
+${hasFiles?`<tr><td style="padding-top:14pt;padding-bottom:14pt;">Please find the remittance advice attached to this email for your reference.</td></tr>`:`<tr><td style="padding-top:14pt;"></td></tr>`}
+<tr><td style="padding-bottom:14pt;">Could you please confirm receipt of the above payment(s)?</td></tr>
+<tr><td style="padding-bottom:14pt;">Should you have any questions or notice any discrepancies, please do not hesitate to contact us.</td></tr>
+<tr><td style="padding-top:14pt;">Best regards,<br/><br/><strong>${senderName}</strong><br/>${senderCompany}</td></tr>
+</table>`;
 }
 
-// ── TagInput ────────────────────────────────────────────
+// Flexible email HTML
+function buildFlexHTML(vendor,rows,flexHeaders,senderName,senderCompany,date){
+  const thStyle=`style="background:#1F3864;color:#fff;padding:8px 12px;border:1px solid #1F3864;font-family:Arial,sans-serif;font-size:11pt;white-space:nowrap;"`;
+  const td=bg=>`style="padding:7px 12px;border:1px solid #d0d0d0;font-family:Arial,sans-serif;font-size:11pt;background:${bg};"`;
+  const headers=flexHeaders.map(h=>`<th ${thStyle}>${h}</th>`).join("");
+  const dataRows=rows.map((r,i)=>{
+    const bg=i%2===0?"#ffffff":"#f0f4fa";
+    const cells=flexHeaders.map(h=>`<td ${td(bg)}>${r._raw[h]||"—"}</td>`).join("");
+    return`<tr>${cells}</tr>`;
+  }).join("\n");
+  return`<table cellpadding="0" cellspacing="0" border="0" style="font-family:Arial,sans-serif;font-size:11pt;color:#222;">
+<tr><td style="padding-bottom:14pt;">Dear ${vendor} Team,</td></tr>
+<tr><td style="padding-bottom:14pt;">We are pleased to inform you that the following payment(s) have been successfully processed on <strong style="white-space:nowrap;">${date}</strong>.</td></tr>
+<tr><td style="padding-bottom:14pt;">Please find the details below:</td></tr>
+<tr><td style="padding-bottom:0;">
+  <table style="border-collapse:collapse;">
+    <thead><tr>${headers}</tr></thead>
+    <tbody>${dataRows}</tbody>
+  </table>
+</td></tr>
+<tr><td style="padding-top:14pt;"></td></tr>
+<tr><td style="padding-bottom:14pt;">Could you please confirm receipt of the above payment(s)?</td></tr>
+<tr><td style="padding-bottom:14pt;">Should you have any questions or notice any discrepancies, please do not hesitate to contact us.</td></tr>
+<tr><td style="padding-top:14pt;">Best regards,<br/><br/><strong>${senderName}</strong><br/>${senderCompany}</td></tr>
+</table>`;
+}
+
 function TagInput({value=[],onChange,placeholder}){
   const[input,setInput]=useState("");
   const add=v=>{const items=v.split(/[,;\s]+/).map(e=>e.trim()).filter(Boolean);onChange([...new Set([...value,...items])]);setInput("");};
@@ -145,23 +189,24 @@ function TagInput({value=[],onChange,placeholder}){
   );
 }
 
-// ── Main App ────────────────────────────────────────────
 function App(){
-  const[rows,setRows]           =useState(SAMPLE_DATA);
-  const[contacts,setContacts]   =useState(()=>loadLS(CONTACTS_KEY,{}));
-  const[settings,setSettings]   =useState(()=>loadLS(SETTINGS_KEY,{senderName:"AP Team",senderCompany:"Your Company"}));
-  const[paymentDate,setDate]    =useState(()=>new Date().toISOString().split("T")[0]);
-  const[attachments,setAtt]     =useState({});
-  const[drafts,setDrafts]       =useState({});
-  const[activeTab,setTab]       =useState("data");
-  const[activeDraft,setAD]      =useState(null);
-  const[editingBody,setEB]      =useState({});
-  const[pasteText,setPaste]     =useState("");
-  const[token,setToken]         =useState(null);
-  const[userEmail,setUserEmail] =useState(null);
-  const[authStatus,setAS]       =useState("idle");
-  const[pushStatus,setPS]       =useState({});
-  const[pushAll,setPushAll]     =useState("idle");
+  const[rows,setRows]             =useState(SAMPLE_DATA);
+  const[dataMode,setDataMode]     =useState("standard");
+  const[flexHeaders,setFlexHeaders]=useState([]);
+  const[contacts,setContacts]     =useState(()=>loadLS(CONTACTS_KEY,{}));
+  const[settings,setSettings]     =useState(()=>loadLS(SETTINGS_KEY,{senderName:"AP Team",senderCompany:"Your Company"}));
+  const[paymentDate,setDate]      =useState(()=>new Date().toISOString().split("T")[0]);
+  const[attachments,setAtt]       =useState({});
+  const[drafts,setDrafts]         =useState({});
+  const[activeTab,setTab]         =useState("data");
+  const[activeDraft,setAD]        =useState(null);
+  const[editingBody,setEB]        =useState({});
+  const[pasteText,setPaste]       =useState("");
+  const[token,setToken]           =useState(null);
+  const[userEmail,setUserEmail]   =useState(null);
+  const[authStatus,setAS]         =useState("idle");
+  const[pushStatus,setPS]         =useState({});
+  const[pushAll,setPushAll]       =useState("idle");
 
   const grouped=groupByVendor(rows);
   const vendors=Object.keys(grouped);
@@ -180,7 +225,6 @@ function App(){
     });
   },[rows]);
 
-  // Handle OAuth redirect
   useEffect(()=>{
     const hash=window.location.hash;
     if(!hash.includes("code="))return;
@@ -191,12 +235,11 @@ function App(){
     setAS("pending");
     exchangeCode(code,verifier).then(async data=>{
       if(data.access_token){
-        setToken(data.access_token);
-        setAS("done");
+        setToken(data.access_token);setAS("done");
         const me=await fetch("https://graph.microsoft.com/v1.0/me",{headers:{Authorization:`Bearer ${data.access_token}`}}).then(r=>r.json());
         setUserEmail(me.userPrincipalName||me.mail||"");
         window.history.replaceState(null,"",window.location.pathname);
-      }else{setAS("error");}
+      }else setAS("error");
     }).catch(()=>setAS("error"));
   },[]);
 
@@ -233,11 +276,20 @@ function App(){
   const buildDrafts=()=>{
     const nd={};
     vendors.forEach(v=>{
-      const invoices=grouped[v],groups=getGroups(v),hasFiles=(attachments[v]?.files||[]).length>0;
-      nd[v]={to:contacts[v]?.to||[],cc:contacts[v]?.cc||[],
+      const invoices=grouped[v];
+      let body;
+      if(dataMode==="flex"){
+        body=buildFlexHTML(v,invoices,flexHeaders,settings.senderName,settings.senderCompany,paymentDate);
+      } else {
+        const groups=getGroups(v);
+        const hasFiles=(attachments[v]?.files||[]).length>0;
+        body=buildHTML(v,invoices,groups,hasFiles,settings.senderName,settings.senderCompany,paymentDate);
+      }
+      nd[v]={
+        to:contacts[v]?.to||[],cc:contacts[v]?.cc||[],
         subject:`Payment Notification – ${v} – ${paymentDate}`,
-        body:buildHTML(v,invoices,groups,hasFiles,settings.senderName,settings.senderCompany,paymentDate),
-        invoices,files:attachments[v]?.files||[]};
+        body,invoices,files:attachments[v]?.files||[],
+      };
     });
     setDrafts(nd);setAD(vendors[0]);setTab("drafts");
   };
@@ -276,8 +328,6 @@ function App(){
     color:activeTab===t?"#1F3864":"#555"});
   const btn=(x={})=>({border:"none",borderRadius:7,padding:"9px 18px",cursor:"pointer",fontSize:13,fontWeight:600,...x});
 
-  const isConfigured=CLIENT_ID!=="YOUR_AZURE_APP_CLIENT_ID";
-
   return(
     <div style={{fontFamily:"Segoe UI,sans-serif",background:"#f0f4f8",minHeight:"100vh"}}>
 
@@ -287,13 +337,11 @@ function App(){
           <span style={{fontSize:26}}>📧</span>
           <div>
             <div style={{fontWeight:700,fontSize:17}}>AP Payment Email Generator</div>
-            <div style={{fontSize:11,opacity:0.85}}>Outlook Draft Integration · Flexible grouping · Trace links</div>
+            <div style={{fontSize:11,opacity:0.85}}>Outlook Draft Integration · Standard & Flexible column mode</div>
           </div>
         </div>
         <div>
-          {!isConfigured?(
-            <div style={{background:"#ff9800",color:"#fff",borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:600}}>⚠️ Azure App ID not configured</div>
-          ):authStatus==="done"?(
+          {authStatus==="done"?(
             <div style={{background:"rgba(255,255,255,0.15)",borderRadius:8,padding:"7px 14px",fontSize:12,display:"flex",alignItems:"center",gap:6}}>
               <span style={{color:"#90ee90",fontWeight:700}}>✓ Connected</span>
               <span style={{opacity:0.8}}>{userEmail}</span>
@@ -306,50 +354,74 @@ function App(){
         </div>
       </div>
 
-      {/* Setup banner */}
-      {!isConfigured&&(
-        <div style={{background:"#fff3cd",borderBottom:"1px solid #ffc107",padding:"10px 28px",fontSize:13,color:"#7a5000"}}>
-          <strong>Setup required:</strong> 将代码顶部的 <code>YOUR_AZURE_APP_CLIENT_ID</code> 替换为你的 Azure App Client ID。
-          {" "}<a href="https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noreferrer">Azure Portal 注册 →</a>
-          {" "}(Redirect URI = 本文件的 SharePoint URL，权限选 <strong>Mail.ReadWrite</strong> Delegated)
-        </div>
-      )}
-
       {/* Tabs */}
       <div style={{background:"#fff",borderBottom:"2px solid #e2e8f0",display:"flex",padding:"0 24px",overflowX:"auto"}}>
-        {[["data","📊 Data"],["contacts","👥 Contacts"],["attachments","📎 Links & Files"],["settings","⚙️ Settings"],
+        {[["data","📊 Data"],["contacts","👥 Contacts"],
+          ...(dataMode==="standard"?[["attachments","📎 Links & Files"]]:[]),
+          ["settings","⚙️ Settings"],
           ["drafts",`✉️ Drafts${Object.keys(drafts).length?` (${Object.keys(drafts).length})`:""}`]
         ].map(([t,label])=><button key={t} style={tabBtn(t)} onClick={()=>setTab(t)}>{label}</button>)}
       </div>
 
-      <div style={{padding:20,maxWidth:1100,margin:"0 auto"}}>
+      <div style={{padding:20,maxWidth:1200,margin:"0 auto"}}>
 
         {/* DATA */}
         {activeTab==="data"&&<>
           <div style={card()}>
             <div style={{fontWeight:600,marginBottom:6}}>📋 Paste from Excel</div>
-            <div style={{fontSize:12,color:"#666",marginBottom:8}}>选中付款表（含表头）→ Ctrl+C → 粘贴 → Load</div>
+            <div style={{fontSize:12,color:"#666",marginBottom:8}}>
+              选中付款表（含表头）→ Ctrl+C → 粘贴 → Load<br/>
+              <span style={{color:"#1F3864"}}>📋 Standard mode：固定5列（Vendor / Invoice No. / Amount Local / Currency / Comment）</span><br/>
+              <span style={{color:"#7c3aed"}}>🔀 Flexible mode：第一列为Vendor，其余列自动读取表头</span>
+            </div>
             <textarea value={pasteText} onChange={e=>setPaste(e.target.value)} placeholder="Paste Excel data here..."
               style={{width:"100%",height:80,borderRadius:6,border:"1px solid #ddd",padding:10,fontSize:13,resize:"vertical",boxSizing:"border-box"}}/>
-            <button onClick={()=>{const p=parseCSV(pasteText);if(p.length){setRows(p);alert(`✅ ${p.length} rows loaded`);}else alert("❌ Parse failed");}}
-              style={btn({marginTop:8,background:"#1F3864",color:"#fff"})}>Load Data</button>
+            <div style={{display:"flex",alignItems:"center",gap:12,marginTop:8}}>
+              <button onClick={()=>{
+                const result=parseCSV(pasteText);
+                if(result.rows.length){
+                  setRows(result.rows);setDataMode(result.mode);setFlexHeaders(result.flexHeaders);
+                  alert(`✅ ${result.rows.length} rows loaded — ${result.mode==="flex"?"🔀 Flexible mode":"📋 Standard mode"}`);
+                }else alert("❌ Parse failed — please include header row");
+              }} style={btn({background:"#1F3864",color:"#fff"})}>Load Data</button>
+              <div style={{fontSize:12,fontWeight:600,padding:"4px 12px",borderRadius:20,
+                background:dataMode==="flex"?"#f3e8ff":"#e8edf8",
+                color:dataMode==="flex"?"#7c3aed":"#1F3864"}}>
+                {dataMode==="flex"?`🔀 Flexible mode — ${flexHeaders.length} cols`:"📋 Standard mode"}
+              </div>
+            </div>
           </div>
           <div style={card()}>
             <div style={{fontWeight:600,marginBottom:10}}>Current Data — {rows.length} rows · {vendors.length} vendors</div>
             <div style={{overflowX:"auto"}}>
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
                 <thead><tr style={{background:"#f7f9fc"}}>
-                  {["Vendor","Invoice No.","Amount","Currency","Comment"].map(h=>(
-                    <th key={h} style={{padding:"7px 10px",textAlign:"left",borderBottom:"2px solid #e2e8f0",color:"#555"}}>{h}</th>
-                  ))}
+                  {dataMode==="standard"
+                    ?["Vendor","Invoice No.","Amount","Currency","Comment"].map(h=>(
+                        <th key={h} style={{padding:"7px 10px",textAlign:"left",borderBottom:"2px solid #e2e8f0",color:"#555"}}>{h}</th>
+                      ))
+                    :["Vendor",...flexHeaders].map(h=>(
+                        <th key={h} style={{padding:"7px 10px",textAlign:"left",borderBottom:"2px solid #e2e8f0",color:"#555",whiteSpace:"nowrap"}}>{h}</th>
+                      ))
+                  }
                 </tr></thead>
                 <tbody>{rows.map((r,i)=>(
                   <tr key={i} style={{borderBottom:"1px solid #f0f0f0",background:i%2?"#fafafa":"#fff"}}>
-                    <td style={{padding:"6px 10px",fontWeight:600}}>{r.vendor}</td>
-                    <td style={{padding:"6px 10px",fontFamily:"monospace"}}>{r.invoice}</td>
-                    <td style={{padding:"6px 10px",textAlign:"right"}}>{r.amount}</td>
-                    <td style={{padding:"6px 10px"}}><span style={{background:"#e8edf8",color:"#1F3864",padding:"2px 7px",borderRadius:4,fontSize:11,fontWeight:600}}>{r.currency}</span></td>
-                    <td style={{padding:"6px 10px",color:"#888",fontSize:12}}>{r.comment||"—"}</td>
+                    {dataMode==="standard"
+                      ?<>
+                        <td style={{padding:"6px 10px",fontWeight:600}}>{r.vendor}</td>
+                        <td style={{padding:"6px 10px",fontFamily:"monospace"}}>{r.invoice}</td>
+                        <td style={{padding:"6px 10px",textAlign:"right"}}>{r.amount}</td>
+                        <td style={{padding:"6px 10px"}}><span style={{background:"#e8edf8",color:"#1F3864",padding:"2px 7px",borderRadius:4,fontSize:11,fontWeight:600}}>{r.currency}</span></td>
+                        <td style={{padding:"6px 10px",color:"#888",fontSize:12}}>{r.comment||"—"}</td>
+                      </>
+                      :<>
+                        <td style={{padding:"6px 10px",fontWeight:600}}>{r.vendor}</td>
+                        {flexHeaders.map(h=>(
+                          <td key={h} style={{padding:"6px 10px",fontSize:12,whiteSpace:"nowrap"}}>{r._raw[h]||"—"}</td>
+                        ))}
+                      </>
+                    }
                   </tr>
                 ))}</tbody>
               </table>
@@ -360,7 +432,7 @@ function App(){
         {/* CONTACTS */}
         {activeTab==="contacts"&&<>
           <div style={card({background:"#fffbea",border:"1px solid #f0e68c",padding:"12px 16px"})}>
-            <span style={{fontSize:13,color:"#7a6200"}}>💾 联系人自动保存到本地。输入后按 <kbd>Enter</kbd> 或 <kbd>,</kbd> 确认，支持多个。</span>
+            <span style={{fontSize:13,color:"#7a6200"}}>💾 联系人自动保存。输入后按 <kbd>Enter</kbd> 或 <kbd>,</kbd> 确认。</span>
           </div>
           {vendors.map(v=>(
             <div key={v} style={card()}>
@@ -375,10 +447,10 @@ function App(){
           ))}
         </>}
 
-        {/* LINKS & FILES */}
-        {activeTab==="attachments"&&<>
+        {/* LINKS & FILES (standard mode only) */}
+        {activeTab==="attachments"&&dataMode==="standard"&&<>
           <div style={card({background:"#f0f4ff",border:"1px solid #c7d2fe",padding:"12px 16px"})}>
-            <div style={{fontSize:13,color:"#3730a3"}}>🔗 <strong>Payment Grouping</strong>：多张invoice合并一笔共用一个trace link，或分开多笔各自对应。</div>
+            <div style={{fontSize:13,color:"#3730a3"}}>🔗 <strong>Payment Grouping</strong>：多张invoice合并一笔共用trace link，或分开多笔各自对应。</div>
           </div>
           {vendors.map(v=>{
             const invoices=grouped[v],groups=getGroups(v);
@@ -393,24 +465,22 @@ function App(){
                   <div key={gi} style={{border:"1px solid #e2e8f0",borderRadius:8,padding:14,marginBottom:10,background:"#fafcff"}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
                       <span style={{fontWeight:600,fontSize:13,color:"#444"}}>Group {gi+1} <span style={{fontWeight:400,color:"#888"}}>({g.invoiceIndices.length} invoice{g.invoiceIndices.length!==1?"s":""})</span></span>
-                      {groups.length>1&&<button onClick={()=>removeGroup(v,gi)} style={{background:"none",border:"none",color:"#ef4444",cursor:"pointer",fontSize:18,lineHeight:1}}>×</button>}
+                      {groups.length>1&&<button onClick={()=>removeGroup(v,gi)} style={{background:"none",border:"none",color:"#ef4444",cursor:"pointer",fontSize:18}}>×</button>}
                     </div>
                     <div style={{marginBottom:10}}>
-                      <div style={{fontSize:12,color:"#777",marginBottom:6}}>Invoices in this group:</div>
+                      <div style={{fontSize:12,color:"#777",marginBottom:6}}>Invoices:</div>
                       <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
                         {invoices.map((inv,idx)=>{
                           const inThis=g.invoiceIndices.includes(idx);
                           const inOther=!inThis&&groups.some((og,ogi)=>ogi!==gi&&og.invoiceIndices.includes(idx));
-                          return(
-                            <button key={idx} onClick={()=>toggleInvoice(v,gi,idx)}
-                              style={{padding:"4px 10px",borderRadius:6,fontSize:12,cursor:"pointer",fontWeight:inThis?700:400,
-                                background:inThis?"#1F3864":inOther?"#f3f4f6":"#fff",
-                                color:inThis?"#fff":inOther?"#aaa":"#444",
-                                border:inThis?"1px solid #1F3864":"1px solid #ccc",
-                                textDecoration:inOther?"line-through":"none"}}>
-                              {inv.invoice} <span style={{opacity:0.7}}>{inv.currency} {inv.amount}</span>
-                            </button>
-                          );
+                          return<button key={idx} onClick={()=>toggleInvoice(v,gi,idx)}
+                            style={{padding:"4px 10px",borderRadius:6,fontSize:12,cursor:"pointer",fontWeight:inThis?700:400,
+                              background:inThis?"#1F3864":inOther?"#f3f4f6":"#fff",
+                              color:inThis?"#fff":inOther?"#aaa":"#444",
+                              border:inThis?"1px solid #1F3864":"1px solid #ccc",
+                              textDecoration:inOther?"line-through":"none"}}>
+                            {inv.invoice} <span style={{opacity:0.7}}>{inv.currency} {inv.amount}</span>
+                          </button>;
                         })}
                       </div>
                     </div>
@@ -422,26 +492,21 @@ function App(){
                     </div>
                   </div>
                 ))}
-                {allAssigned.some(a=>!a)&&(
-                  <div style={{fontSize:12,color:"#b45309",background:"#fff7ed",borderRadius:6,padding:"6px 10px"}}>
-                    ⚠️ Unassigned: {invoices.filter((_,i)=>!allAssigned[i]).map(r=>r.invoice).join(", ")}
-                  </div>
-                )}
+                {allAssigned.some(a=>!a)&&<div style={{fontSize:12,color:"#b45309",background:"#fff7ed",borderRadius:6,padding:"6px 10px"}}>
+                  ⚠️ Unassigned: {invoices.filter((_,i)=>!allAssigned[i]).map(r=>r.invoice).join(", ")}
+                </div>}
                 <div style={{marginTop:14,paddingTop:12,borderTop:"1px dashed #e2e8f0"}}>
                   <label style={{fontSize:12,color:"#777",display:"block",marginBottom:6}}>📄 Remittance Attachment</label>
                   <label style={{background:"#f0f4f8",border:"2px dashed #ccc",borderRadius:8,padding:"8px 16px",cursor:"pointer",fontSize:13,color:"#555",display:"inline-block"}}>
-                    + Upload PDF / Image
-                    <input type="file" accept=".pdf,image/*" multiple style={{display:"none"}} onChange={e=>handleFile(v,e.target.files)}/>
+                    + Upload PDF / Image<input type="file" accept=".pdf,image/*" multiple style={{display:"none"}} onChange={e=>handleFile(v,e.target.files)}/>
                   </label>
-                  {(attachments[v]?.files||[]).length>0&&(
-                    <div style={{marginTop:8,display:"flex",flexWrap:"wrap",gap:6}}>
-                      {attachments[v].files.map((f,i)=>(
-                        <span key={i} style={{background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:6,padding:"4px 10px",fontSize:12,display:"flex",alignItems:"center",gap:6}}>
-                          📄 {f.name}<span onClick={()=>removeFile(v,i)} style={{cursor:"pointer",color:"#ef4444",fontWeight:700}}>×</span>
-                        </span>
-                      ))}
-                    </div>
-                  )}
+                  {(attachments[v]?.files||[]).length>0&&<div style={{marginTop:8,display:"flex",flexWrap:"wrap",gap:6}}>
+                    {attachments[v].files.map((f,i)=>(
+                      <span key={i} style={{background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:6,padding:"4px 10px",fontSize:12,display:"flex",alignItems:"center",gap:6}}>
+                        📄{f.name}<span onClick={()=>removeFile(v,i)} style={{cursor:"pointer",color:"#ef4444",fontWeight:700}}>×</span>
+                      </span>
+                    ))}
+                  </div>}
                 </div>
               </div>
             );
@@ -474,12 +539,12 @@ function App(){
                 padding:"12px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12
               })}>
                 {authStatus==="done"
-                  ?<div style={{fontSize:13,color:"#3730a3"}}>✅ Connected as <strong>{userEmail}</strong> — ready to push drafts to Outlook</div>
-                  :<div style={{fontSize:13,color:"#7a5000"}}>⚠️ Sign in with Microsoft (top right) to push drafts directly to Outlook</div>}
+                  ?<div style={{fontSize:13,color:"#3730a3"}}>✅ Connected as <strong>{userEmail}</strong></div>
+                  :<div style={{fontSize:13,color:"#7a5000"}}>⚠️ Sign in with Microsoft to push drafts to Outlook</div>}
                 {authStatus==="done"&&(
                   <button onClick={pushAllToOutlook} disabled={pushAll==="pushing"}
                     style={btn({background:pushAll==="done"?"#22c55e":pushAll==="pushing"?"#aaa":"#1F3864",color:"#fff",whiteSpace:"nowrap",minWidth:220})}>
-                    {pushAll==="pushing"?"⏳ Pushing all...":pushAll==="done"?"✅ All drafts saved!":`📥 Save All ${Object.keys(drafts).length} Drafts to Outlook`}
+                    {pushAll==="pushing"?"⏳ Pushing...":pushAll==="done"?"✅ All saved!":`📥 Save All ${Object.keys(drafts).length} Drafts to Outlook`}
                   </button>
                 )}
               </div>
@@ -497,7 +562,7 @@ function App(){
                         {pushStatus[v]==="error"&&<span>❌</span>}
                       </div>
                       <div style={{fontSize:11,color:"#888",marginTop:2}}>
-                        {drafts[v].invoices.length} inv · {drafts[v].to.length>0?`${drafts[v].to.length} TO`:"⚠️ no TO"}
+                        {drafts[v].invoices.length} row(s) · {drafts[v].to.length>0?`${drafts[v].to.length} TO`:"⚠️ no TO"}
                       </div>
                     </div>
                   ))}
@@ -509,7 +574,7 @@ function App(){
                       {authStatus==="done"&&(
                         <button onClick={()=>pushToOutlook(activeDraft)} disabled={pushStatus[activeDraft]==="pushing"}
                           style={btn({background:pushStatus[activeDraft]==="done"?"#22c55e":pushStatus[activeDraft]==="pushing"?"#aaa":"#1F3864",color:"#fff"})}>
-                          {pushStatus[activeDraft]==="pushing"?"⏳ Saving...":pushStatus[activeDraft]==="done"?"✅ Saved to Outlook!":pushStatus[activeDraft]==="error"?"❌ Error — Retry":"📥 Save Draft to Outlook"}
+                          {pushStatus[activeDraft]==="pushing"?"⏳ Saving...":pushStatus[activeDraft]==="done"?"✅ Saved!":pushStatus[activeDraft]==="error"?"❌ Retry":"📥 Save to Outlook"}
                         </button>
                       )}
                     </div>
@@ -523,7 +588,7 @@ function App(){
                     </div>
                     {drafts[activeDraft].files?.length>0&&(
                       <div style={{marginBottom:12,padding:"8px 12px",background:"#fff7ed",borderRadius:8,fontSize:12,color:"#92400e"}}>
-                        📎 Remember to manually attach in Outlook: {drafts[activeDraft].files.map(f=>f.name).join(", ")}
+                        📎 Manually attach in Outlook: {drafts[activeDraft].files.map(f=>f.name).join(", ")}
                       </div>
                     )}
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
@@ -536,7 +601,7 @@ function App(){
                     {editingBody[activeDraft]
                       ?<textarea value={drafts[activeDraft].body} onChange={e=>updateDraft(activeDraft,"body",e.target.value)}
                           style={{width:"100%",height:380,borderRadius:6,border:"1px solid #ddd",padding:10,fontSize:12,fontFamily:"monospace",resize:"vertical",boxSizing:"border-box"}}/>
-                      :<div style={{border:"1px solid #e8e8e8",borderRadius:8,padding:20,background:"#fff",minHeight:280}}
+                      :<div style={{border:"1px solid #e8e8e8",borderRadius:8,padding:20,background:"#fff",minHeight:280,overflowX:"auto"}}
                           dangerouslySetInnerHTML={{__html:drafts[activeDraft].body}}/>
                     }
                   </div>
@@ -551,10 +616,11 @@ function App(){
               style={btn({background:"linear-gradient(135deg,#1F3864,#2e5491)",color:"#fff",padding:"13px 34px",fontSize:15,boxShadow:"0 4px 14px rgba(31,56,100,0.35)"})}>
               ✨ Generate {vendors.length} Draft Email{vendors.length!==1?"s":""}
             </button>
-            <div style={{fontSize:11,color:"#999",marginTop:6}}>Arial 11pt · Navy header · Saves directly to Outlook Drafts folder</div>
+            <div style={{fontSize:11,color:"#999",marginTop:6}}>
+              {dataMode==="flex"?"🔀 Flexible mode — 表格按你的列自动生成":"📋 Standard mode — Invoice / Currency / Amount / Trace Link"}
+            </div>
           </div>
         )}
-
       </div>
     </div>
   );
