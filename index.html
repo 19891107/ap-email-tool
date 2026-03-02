@@ -104,7 +104,7 @@ function buildHTML(vendor, invoices, groups, senderName, senderCompany, date){
   // Styles
   const base="font-family:Arial,sans-serif;font-size:11pt;";
   const pSt=`style="${base}color:#222;margin:0 0 14pt 0;"`;
-  const tblSt=`style="border-collapse:collapse;width:100%;min-width:500px;"`;
+  const tblSt=`style="border-collapse:collapse;width:auto;"`;
 
   // TH styles
   const thC=`style="${base}background:#1F3864;color:#fff;padding:9px 14px;border:1px solid #1F3864;text-align:center;white-space:nowrap;"`;
@@ -178,6 +178,7 @@ function buildHTML(vendor, invoices, groups, senderName, senderCompany, date){
     ${totalRows}
   </tbody>
 </table>
+<p style="margin:0 0 14pt 0;"> </p>
 <p style="margin:0 0 14pt 0;"> </p>
 <p ${pSt}>Could you please confirm receipt of the above payment(s)? Should you have any questions or notice any discrepancies, please do not hesitate to contact us.</p>
 <p ${pSt}>Best regards,<br/><strong>${senderName}</strong><br/>${senderCompany}</p>
