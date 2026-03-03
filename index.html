@@ -178,10 +178,11 @@ function buildHTML(vendor, invoices, groups, senderName, senderCompany, date){
     ${totalRows}
   </tbody>
 </table>
-<p style="margin:0 0 14pt 0;"> </p>
-<p style="margin:0 0 14pt 0;"> </p>
+<p style="margin:0;line-height:1.6;"> </p>
+<p style="margin:0;line-height:1.6;"> </p>
 <p ${pSt}>Could you please confirm receipt of the above payment(s)? Should you have any questions or notice any discrepancies, please do not hesitate to contact us.</p>
-<p ${pSt}>Best regards,<br/><strong>${senderName}</strong><br/>${senderCompany}</p>
+<p style="margin:0 0 14pt 0;"> </p>
+<p ${pSt}>Best regards,<br/><br/><strong>${senderName}</strong><br/>${senderCompany}</p>
 </div>`;
 }
 
