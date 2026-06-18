@@ -140,7 +140,7 @@ ${hasFiles?`<tr><td style="padding-top:14pt;padding-bottom:14pt;">Please find th
 }
 
 // Flexible email HTML
-function buildFlexHTML(vendor,rows,flexHeaders,senderName,senderCompany,date){
+function buildFlexHTML(vendor,rows,flexHeaders,traceLink,hasFiles,senderName,senderCompany,date){
   const thStyle=`style="background:#1F3864;color:#fff;padding:8px 12px;border:1px solid #1F3864;font-family:Arial,sans-serif;font-size:11pt;white-space:nowrap;"`;
   const td=bg=>`style="padding:7px 12px;border:1px solid #d0d0d0;font-family:Arial,sans-serif;font-size:11pt;background:${bg};"`;
   const headers=flexHeaders.map(h=>`<th ${thStyle}>${h}</th>`).join("");
@@ -149,6 +149,8 @@ function buildFlexHTML(vendor,rows,flexHeaders,senderName,senderCompany,date){
     const cells=flexHeaders.map(h=>`<td ${td(bg)}>${r._raw[h]||"—"}</td>`).join("");
     return`<tr>${cells}</tr>`;
   }).join("\n");
+  const traceLine=traceLink?`<tr><td style="padding-top:14pt;padding-bottom:14pt;">🔗 Payment Trace: <a href="${traceLink}" style="color:#1F3864;">View Trace</a></td></tr>`:`<tr><td style="padding-top:14pt;"></td></tr>`;
+  const attachLine=hasFiles?`<tr><td style="padding-bottom:14pt;">Please find the remittance advice attached to this email for your reference.</td></tr>`:"";
   return`<table cellpadding="0" cellspacing="0" border="0" style="font-family:Arial,sans-serif;font-size:11pt;color:#222;">
 <tr><td style="padding-bottom:14pt;">Dear ${vendor} Team,</td></tr>
 <tr><td style="padding-bottom:14pt;">We are pleased to inform you that the following payment(s) have been successfully processed on <strong style="white-space:nowrap;">${date}</strong>.</td></tr>
@@ -159,7 +161,8 @@ function buildFlexHTML(vendor,rows,flexHeaders,senderName,senderCompany,date){
     <tbody>${dataRows}</tbody>
   </table>
 </td></tr>
-<tr><td style="padding-top:14pt;"></td></tr>
+${traceLine}
+${attachLine}
 <tr><td style="padding-bottom:14pt;">Could you please confirm receipt of the above payment(s)?</td></tr>
 <tr><td style="padding-bottom:14pt;">Should you have any questions or notice any discrepancies, please do not hesitate to contact us.</td></tr>
 <tr><td style="padding-top:14pt;">Best regards,<br/><br/><strong>${senderName}</strong><br/>${senderCompany}</td></tr>
@@ -279,7 +282,9 @@ function App(){
       const invoices=grouped[v];
       let body;
       if(dataMode==="flex"){
-        body=buildFlexHTML(v,invoices,flexHeaders,settings.senderName,settings.senderCompany,paymentDate);
+        const traceLink=attachments[v]?.traceLink||"";
+        const hasFiles=(attachments[v]?.files||[]).length>0;
+        body=buildFlexHTML(v,invoices,flexHeaders,traceLink,hasFiles,settings.senderName,settings.senderCompany,paymentDate);
       } else {
         const groups=getGroups(v);
         const hasFiles=(attachments[v]?.files||[]).length>0;
@@ -513,25 +518,36 @@ function App(){
             );
           })}</>}
 
-          {/* Flex mode: only show file upload */}
+          {/* Flex mode: trace link + file upload */}
           {dataMode==="flex"&&<>
             <div style={card({background:"#f0f4ff",border:"1px solid #c7d2fe",padding:"12px 16px"})}>
-              <div style={{fontSize:13,color:"#3730a3"}}>📎 Flexible mode — 可为每个vendor上传 Remittance Advice 附件</div>
+              <div style={{fontSize:13,color:"#3730a3"}}>📎 Flexible mode — 可为每个vendor设置 Trace Link 和上传 Remittance Advice 附件</div>
             </div>
             {vendors.map(v=>(
               <div key={v} style={card()}>
-                <div style={{fontWeight:700,color:"#1F3864",marginBottom:12,fontSize:14}}>🏢 {v}</div>
-                <label style={{fontSize:12,color:"#777",display:"block",marginBottom:6}}>📄 Remittance Attachment</label>
-                <label style={{background:"#f0f4f8",border:"2px dashed #ccc",borderRadius:8,padding:"8px 16px",cursor:"pointer",fontSize:13,color:"#555",display:"inline-block"}}>
-                  + Upload PDF / Image<input type="file" accept=".pdf,image/*" multiple style={{display:"none"}} onChange={e=>handleFile(v,e.target.files)}/>
-                </label>
-                {(attachments[v]?.files||[]).length>0&&<div style={{marginTop:8,display:"flex",flexWrap:"wrap",gap:6}}>
-                  {attachments[v].files.map((f,i)=>(
-                    <span key={i} style={{background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:6,padding:"4px 10px",fontSize:12,display:"flex",alignItems:"center",gap:6}}>
-                      📄{f.name}<span onClick={()=>removeFile(v,i)} style={{cursor:"pointer",color:"#ef4444",fontWeight:700}}>×</span>
-                    </span>
-                  ))}
-                </div>}
+                <div style={{fontWeight:700,color:"#1F3864",marginBottom:14,fontSize:14}}>🏢 {v}</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+                  <div>
+                    <label style={{fontSize:12,color:"#777",display:"block",marginBottom:3}}>🔗 Trace Link</label>
+                    <input value={attachments[v]?.traceLink||""}
+                      onChange={e=>setAtt(a=>({...a,[v]:{...a[v],traceLink:e.target.value}}))}
+                      placeholder="https://bank.com/trace/..." style={IS}/>
+                    {attachments[v]?.traceLink&&<div style={{fontSize:11,color:"#1F3864",marginTop:3}}>✅ Will appear as clickable link in email</div>}
+                  </div>
+                  <div>
+                    <label style={{fontSize:12,color:"#777",display:"block",marginBottom:6}}>📄 Remittance Attachment</label>
+                    <label style={{background:"#f0f4f8",border:"2px dashed #ccc",borderRadius:8,padding:"8px 16px",cursor:"pointer",fontSize:13,color:"#555",display:"inline-block"}}>
+                      + Upload PDF / Image<input type="file" accept=".pdf,image/*" multiple style={{display:"none"}} onChange={e=>handleFile(v,e.target.files)}/>
+                    </label>
+                    {(attachments[v]?.files||[]).length>0&&<div style={{marginTop:8,display:"flex",flexWrap:"wrap",gap:6}}>
+                      {attachments[v].files.map((f,i)=>(
+                        <span key={i} style={{background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:6,padding:"4px 10px",fontSize:12,display:"flex",alignItems:"center",gap:6}}>
+                          📄{f.name}<span onClick={()=>removeFile(v,i)} style={{cursor:"pointer",color:"#ef4444",fontWeight:700}}>×</span>
+                        </span>
+                      ))}
+                    </div>}
+                  </div>
+                </div>
               </div>
             ))}
           </>}
